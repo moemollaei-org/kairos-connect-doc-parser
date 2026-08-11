@@ -43,9 +43,9 @@ pub async fn convert(
         if inputs.len() >= 50 {
             return Err(AppError::BadRequest("too many files (max 50)".into()));
         }
-        if bytes.len() > 50 * 1024 * 1024 {
+        if bytes.len() > 200 * 1024 * 1024 {
             return Err(AppError::BadRequest(format!(
-                "'{filename}' exceeds 50 MB limit"
+                "'{filename}' exceeds 200 MB limit"
             )));
         }
 
