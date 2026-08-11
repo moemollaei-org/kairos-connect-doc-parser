@@ -10,7 +10,7 @@ impl Config {
     pub fn from_env() -> Self {
         Self {
             api_key: std::env::var("DOC_PARSER_API_KEY")
-                .expect("DOC_PARSER_API_KEY must be set"),
+                .unwrap_or_else(|_| "change-me-in-railway-dashboard".into()),
             port: std::env::var("PORT")
                 .unwrap_or_else(|_| "3000".into())
                 .parse()
