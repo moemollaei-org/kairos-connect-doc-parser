@@ -37,6 +37,7 @@ async fn main() -> anyhow::Result<()> {
         .layer(DefaultBodyLimit::max(body_limit));
 
     let convert_route = post(routes::convert::convert)
+        .layer(DefaultBodyLimit::max(body_limit))
         .layer(RequestBodyLimitLayer::new(body_limit));
 
     let app = Router::new()
