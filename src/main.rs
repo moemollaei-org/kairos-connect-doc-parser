@@ -7,7 +7,7 @@ mod routes;
 
 use std::net::SocketAddr;
 
-use axum::{middleware, routing::get, routing::post, Router};
+use axum::{extract::DefaultBodyLimit, middleware, routing::get, routing::post, Router};
 use tower_http::{cors::CorsLayer, limit::RequestBodyLimitLayer, trace::TraceLayer};
 use tracing_subscriber::EnvFilter;
 
@@ -30,12 +30,22 @@ async fn main() -> anyhow::Result<()> {
         }
     });
 
+    let body_limit = config.body_limit_bytes;
+
     let app = Router::new()
         .route("/health", get(routes::health::health))
-        .route("/convert", post(routes::convert::convert))
-        .route("/convert/raw", post(routes::convert_raw::convert_raw))
+        .route(
+            "/convert",
+            post(routes::convert::convert)
+                .layer(RequestBodyLimitLayer::new(body_limit)),
+        )
+        .route(
+            "/convert/raw",
+            post(routes::convert_raw::convert_raw)
+                .layer(DefaultBodyLimit::max(body_limit))
+                .layer(RequestBodyLimitLayer::new(body_limit)),
+        )
         .layer(config_mw)
-        .layer(RequestBodyLimitLayer::new(config.body_limit_bytes))
         .layer(CorsLayer::permissive())
         .layer(TraceLayer::new_for_http());
 
