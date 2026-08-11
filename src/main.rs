@@ -32,19 +32,13 @@ async fn main() -> anyhow::Result<()> {
 
     let body_limit = config.body_limit_bytes;
 
-    // /convert/raw needs DefaultBodyLimit to allow large Bytes extraction
-    let raw_route = post(routes::convert_raw::convert_raw)
-        .layer(DefaultBodyLimit::max(body_limit));
-
-    let convert_route = post(routes::convert::convert)
-        .layer(DefaultBodyLimit::max(body_limit))
-        .layer(RequestBodyLimitLayer::new(body_limit));
-
     let app = Router::new()
         .route("/health", get(routes::health::health))
-        .route("/convert", convert_route)
-        .route("/convert/raw", raw_route)
+        .route("/convert", post(routes::convert::convert))
+        .route("/convert/raw", post(routes::convert_raw::convert_raw))
         .layer(config_mw)
+        .layer(DefaultBodyLimit::max(body_limit))
+        .layer(RequestBodyLimitLayer::new(body_limit))
         .layer(CorsLayer::permissive())
         .layer(TraceLayer::new_for_http());
 
