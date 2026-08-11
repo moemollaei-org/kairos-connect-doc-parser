@@ -1,10 +1,7 @@
-FROM rust:1.85-slim-bookworm AS builder
-WORKDIR /app
-COPY . .
-RUN cargo build --release
-
 FROM debian:bookworm-slim
-RUN apt-get update && apt-get install -y --no-install-recommends ca-certificates && rm -rf /var/lib/apt/lists/*
-COPY --from=builder /app/target/release/kairos-connect-doc-parser /usr/local/bin/doc-parser
+RUN apt-get update && apt-get install -y --no-install-recommends ca-certificates curl && rm -rf /var/lib/apt/lists/*
+RUN curl -fsSL -o /usr/local/bin/doc-parser \
+  "https://github.com/moemollaei-org/kairos-connect-doc-parser/releases/download/v0.1.0/kairos-connect-doc-parser" \
+  && chmod +x /usr/local/bin/doc-parser
 EXPOSE 3000
 CMD ["doc-parser"]
