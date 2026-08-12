@@ -3,11 +3,13 @@ mod config;
 mod converter;
 mod error;
 mod models;
+mod ocr;
+mod pdf_render;
 mod routes;
 
 use std::net::SocketAddr;
 
-use axum::{extract::DefaultBodyLimit, middleware, routing::get, routing::post, Router};
+use axum::{Router, extract::DefaultBodyLimit, middleware, routing::get, routing::post};
 use tower_http::{cors::CorsLayer, limit::RequestBodyLimitLayer, trace::TraceLayer};
 use tracing_subscriber::EnvFilter;
 
@@ -20,6 +22,12 @@ async fn main() -> anyhow::Result<()> {
         .init();
 
     let config = config::Config::from_env();
+
+    tracing::info!(
+        ocr_languages = %config.ocr_languages,
+        ocr_dpi = config.ocr_dpi,
+        "starting doc-parser"
+    );
 
     // Inject Config into every request's extensions (required by ApiKey extractor)
     let config_mw = middleware::from_fn({

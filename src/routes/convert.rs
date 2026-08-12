@@ -1,11 +1,11 @@
 use std::sync::Arc;
 
 use axum::{
+    Extension,
     body::Body,
     extract::{Multipart, Query},
     http::StatusCode,
     response::Response,
-    Extension,
 };
 use bytes::Bytes;
 use futures::StreamExt;
@@ -52,7 +52,7 @@ pub async fn convert(
         let format_hint = query
             .format
             .as_deref()
-            .and_then(|f| anydoc::Format::from_extension(f))
+            .and_then(anydoc::Format::from_extension)
             .or_else(|| anydoc::Format::from_bytes(&bytes));
 
         inputs.push(ConvertInput {
@@ -60,6 +60,7 @@ pub async fn convert(
             filename,
             bytes: bytes.to_vec(),
             format_hint,
+            ocr_enabled: query.ocr,
         });
     }
 
@@ -75,6 +76,7 @@ pub async fn convert(
 
     for input in inputs {
         let tx = tx.clone();
+        let cfg = config.clone();
         let permit = semaphore
             .clone()
             .acquire_owned()
@@ -82,7 +84,7 @@ pub async fn convert(
             .map_err(|e| AppError::Internal(anyhow::anyhow!("semaphore: {e}")))?;
 
         tokio::spawn(async move {
-            let result = converter::convert_one(input).await;
+            let result = converter::convert_one(&cfg, input).await;
             let _ = tx.send(result).await;
             drop(permit);
         });

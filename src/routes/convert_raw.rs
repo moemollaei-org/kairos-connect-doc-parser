@@ -1,11 +1,19 @@
 use std::time::Instant;
 
-use axum::{body::Bytes, http::HeaderMap, Json};
+use axum::{Extension, Json, body::Bytes, extract::Query, http::HeaderMap};
 
-use crate::{auth::ApiKey, error::AppError, models::ConvertResult};
+use crate::{
+    auth::ApiKey,
+    config::Config,
+    converter::{self, ConvertInput},
+    error::AppError,
+    models::{ConvertQuery, ConvertResult},
+};
 
 pub async fn convert_raw(
     _auth: ApiKey,
+    Extension(config): Extension<Config>,
+    Query(query): Query<ConvertQuery>,
     headers: HeaderMap,
     body: Bytes,
 ) -> Result<Json<ConvertResult>, AppError> {
@@ -18,29 +26,32 @@ pub async fn convert_raw(
     let format_hint = headers
         .get("x-doc-format")
         .and_then(|v| v.to_str().ok())
-        .and_then(|f| anydoc::Format::from_extension(f))
+        .and_then(anydoc::Format::from_extension)
         .or_else(|| anydoc::Format::from_bytes(&body));
 
+    let input = ConvertInput {
+        index: 0,
+        filename: filename.clone(),
+        bytes: body.to_vec(),
+        format_hint,
+        ocr_enabled: query.ocr,
+    };
+
     let start = Instant::now();
+    let result = converter::convert_one(&config, input).await;
+    let mut result = result;
+    result.elapsed_ms = start.elapsed().as_millis() as u64;
 
-    // Call anydoc directly to preserve ConvertError type for proper HTTP mapping
-    let result = tokio::task::spawn_blocking(move || {
-        let detected = anydoc::Format::from_bytes(&body);
-        anydoc::to_markdown_bytes(&body, format_hint.or(detected))
-    })
-    .await
-    .map_err(|e| AppError::Internal(anyhow::anyhow!("task panicked: {e}")))?;
-
-    let elapsed_ms = start.elapsed().as_millis() as u64;
-
-    match result {
-        Ok(markdown) => Ok(Json(ConvertResult {
-            index: 0,
-            filename,
-            markdown: Some(markdown),
-            error: None,
-            elapsed_ms,
-        })),
-        Err(e) => Err(AppError::Convert(e)),
+    if let Some(ref e) = result.error {
+        // Map OCR/conversion errors appropriately
+        if e.starts_with("OCR failed") || e.starts_with("OCR task") {
+            return Err(AppError::Ocr(e.clone()));
+        }
+        // For anydoc conversion errors, use the Convert error type
+        if e.contains("Document is") || e.contains("Unsupported") || e.contains("malformed") {
+            return Err(AppError::BadRequest(e.clone()));
+        }
     }
+
+    Ok(Json(result))
 }

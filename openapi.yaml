@@ -1,0 +1,299 @@
+openapi: "3.0.3"
+info:
+  title: Kairos Connect Document Parser
+  description: |
+    HTTP microservice for document-to-markdown conversion with OCR support
+    for images and scanned PDFs. Wraps anydoc for 14+ document formats and
+    Tesseract OCR for image-based content.
+
+    **Base URL:** `https://parse-doc.thekairos.app`
+
+    **Auth:** All `/convert*` endpoints require `X-Api-Key` header.
+  version: "0.2.0"
+  contact:
+    name: Kairos Connect Team
+
+servers:
+  - url: https://parse-doc.thekairos.app
+    description: Production
+
+security:
+  - ApiKeyAuth: []
+
+paths:
+  /health:
+    get:
+      summary: Health check
+      description: Returns service health status and OCR availability.
+      operationId: health
+      tags: [System]
+      security: []
+      responses:
+        "200":
+          description: Service is healthy
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/HealthResponse"
+              example:
+                status: "ok"
+                version: "0.2.0"
+                ocr_available: true
+
+  /convert:
+    post:
+      summary: Convert documents to markdown (multipart)
+      description: |
+        Upload one or more files via `multipart/form-data`. Returns NDJSON
+        stream — one JSON object per file as each conversion completes.
+
+        **Supported formats:** `.doc`, `.docx`, `.pptx`, `.xlsx`, `.pdf`,
+        `.png`, `.jpg`, `.jpeg`, `.gif`, `.bmp`, `.tiff`, `.webp`, `.csv`,
+        `.epub`, `.rtf`, `.odt`, `.ods`, `.odp`
+
+        **OCR:** Enabled by default for images and PDFs. Set `?ocr=false`
+        to disable and use anydoc-only conversion.
+      operationId: convert
+      tags: [Conversion]
+      parameters:
+        - name: format
+          in: query
+          description: Force format for signature-less files (e.g. `csv`)
+          schema:
+            type: string
+            enum: [csv, pdf, docx, xlsx, pptx]
+        - name: ocr
+          in: query
+          description: Enable OCR for images and image-based PDF pages (default true)
+          schema:
+            type: boolean
+            default: true
+      requestBody:
+        required: true
+        content:
+          multipart/form-data:
+            schema:
+              type: object
+              properties:
+                file:
+                  type: array
+                  items:
+                    type: string
+                    format: binary
+                  description: One or more files to convert (max 50)
+      responses:
+        "200":
+          description: NDJSON stream of conversion results
+          content:
+            application/x-ndjson:
+              schema:
+                type: string
+                description: |
+                  Newline-delimited JSON. Each line is a ConvertResult object.
+                  Stream ends when all files are processed.
+              example: |
+                {"index":0,"filename":"report.docx","markdown":"# Title\n\nBody text","json":{"has_ocr":false,"format":"document"},"elapsed_ms":4}
+                {"index":1,"filename":"scan.pdf","markdown":"## Page 1 (OCR)\n\nScanned invoice text","json":{"pages":[{"page":0,"type":"ocr","content":"Scanned invoice text","confidence":0.92}],"has_ocr":true,"ocr_page_indices":[0],"format":"pdf","page_count":1,"ocr_confidence":[0.92]},"elapsed_ms":820}
+                {"index":2,"filename":"photo.jpg","markdown":"Receipt text here","json":{"pages":[{"page":0,"type":"ocr","content":"Receipt text here","confidence":0.87}],"has_ocr":true,"ocr_page_indices":[0],"format":"image","page_count":1,"ocr_confidence":[0.87]},"elapsed_ms":340}
+        "400":
+          description: Bad request (no files, invalid format, malformed multipart)
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "401":
+          description: Missing or invalid API key
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "413":
+          description: Request body exceeds limit
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "422":
+          description: Document is encrypted, unsupported, or corrupted
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+
+  /convert/raw:
+    post:
+      summary: Convert a single document (raw bytes)
+      description: |
+        Upload a single file as raw bytes. Returns a single JSON object.
+        Use for simple integrations where multipart is unnecessary.
+
+        Headers:
+        - `X-Doc-Filename` — filename for the response (optional)
+        - `X-Doc-Format` — force format hint (e.g. `csv`, optional)
+        - `Content-Type: application/octet-stream` (required)
+      operationId: convertRaw
+      tags: [Conversion]
+      parameters:
+        - name: ocr
+          in: query
+          description: Enable OCR (default true)
+          schema:
+            type: boolean
+            default: true
+        - name: X-Doc-Filename
+          in: header
+          description: Original filename for the response
+          schema:
+            type: string
+        - name: X-Doc-Format
+          in: header
+          description: Force format hint (e.g. `csv`, `pdf`)
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/octet-stream:
+            schema:
+              type: string
+              format: binary
+      responses:
+        "200":
+          description: Conversion result
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ConvertResult"
+        "400":
+          $ref: "#/components/responses/Error400"
+        "401":
+          $ref: "#/components/responses/Error401"
+        "422":
+          $ref: "#/components/responses/Error422"
+
+components:
+  securitySchemes:
+    ApiKeyAuth:
+      type: apiKey
+      in: header
+      name: X-Api-Key
+
+  schemas:
+    HealthResponse:
+      type: object
+      properties:
+        status:
+          type: string
+          example: "ok"
+        version:
+          type: string
+          example: "0.2.0"
+        ocr_available:
+          type: boolean
+          description: Whether Tesseract OCR is available on this instance
+
+    ConvertResult:
+      type: object
+      properties:
+        index:
+          type: integer
+          description: 0-based file index in the request
+        filename:
+          type: string
+          description: Original filename
+        markdown:
+          type: string
+          nullable: true
+          description: Converted GitHub-Flavored Markdown (combined anydoc + OCR)
+        json:
+          $ref: "#/components/schemas/DocumentJson"
+        error:
+          type: string
+          nullable: true
+          description: Error message if conversion failed
+        elapsed_ms:
+          type: integer
+          description: Conversion time in milliseconds
+
+    DocumentJson:
+      type: object
+      properties:
+        pages:
+          type: array
+          nullable: true
+          items:
+            $ref: "#/components/schemas/PageContent"
+        has_ocr:
+          type: boolean
+          description: Whether any OCR was performed
+        ocr_page_indices:
+          type: array
+          nullable: true
+          items:
+            type: integer
+          description: 0-based indices of OCR'd pages
+        format:
+          type: string
+          enum: [document, pdf, image]
+          description: Detected format category
+        page_count:
+          type: integer
+          nullable: true
+          description: Total number of pages
+        ocr_confidence:
+          type: array
+          nullable: true
+          items:
+            type: number
+          description: Per-page OCR confidence scores (0.0-1.0)
+
+    PageContent:
+      type: object
+      properties:
+        page:
+          type: integer
+          description: 0-based page index
+        type:
+          type: string
+          enum: [text, ocr, mixed]
+          description: How content was obtained
+        content:
+          type: string
+          description: Extracted text
+        confidence:
+          type: number
+          nullable: true
+          description: OCR confidence (0.0-1.0), only for OCR'd pages
+
+    ErrorResponse:
+      type: object
+      properties:
+        error:
+          type: string
+          description: Error message
+
+  responses:
+    Error400:
+      description: Bad request
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/ErrorResponse"
+    Error401:
+      description: Unauthorized
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/ErrorResponse"
+    Error422:
+      description: Unprocessable entity
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/ErrorResponse"
+
+tags:
+  - name: System
+    description: Health and status endpoints
+  - name: Conversion
+    description: Document and image conversion endpoints
