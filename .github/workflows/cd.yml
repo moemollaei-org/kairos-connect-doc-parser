@@ -1,32 +1,94 @@
 name: CD — Build, Release & Deploy
 
 on:
-  # Manual trigger: lets you redeploy without a code change, and covers
-  # pushes whose only changes are path-ignored below.
+  # Manual trigger: redeploy without a code change.
   workflow_dispatch:
-  push:
+  # CD is chained to CI rather than firing on push directly, so a deploy can
+  # only come from a commit whose checks actually went green. Previously both
+  # workflows started on the same push and raced, meaning a red CI did not stop
+  # a deploy. `workflow_run` fires when CI finishes; the gate drops anything
+  # that did not succeed.
+  workflow_run:
+    workflows: ["CI"]
+    types: [completed]
     branches: [master]
-    paths-ignore:
-      - "README.md"
-      - "openapi.yaml"
-      - ".github/**"
+
+# One deploy at a time. The release job force-pushes a tag and replaces the
+# release asset, so two overlapping runs would fight over the same objects.
+# cancel-in-progress stays false deliberately: cancelling a run that has already
+# reached `railway up` would leave a half-finished production deploy.
+concurrency:
+  group: cd-${{ github.ref }}
+  cancel-in-progress: false
 
 env:
   CARGO_TERM_COLOR: always
+  RAILWAY_CLI_VERSION: "5.37.7"
 
 jobs:
+  # ── Gate: CI must have passed, and something deployable must have changed ──
+  gate:
+    name: Verify CI succeeded
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    if: github.event_name == 'workflow_dispatch' || github.event.workflow_run.conclusion == 'success'
+    outputs:
+      deploy: ${{ steps.scope.outputs.deploy }}
+      sha: ${{ steps.scope.outputs.sha }}
+    steps:
+      # On a workflow_run event `github.sha` is the default branch head, NOT
+      # the commit that triggered CI. Always resolve the triggering commit.
+      - name: Resolve triggering commit
+        id: sha
+        run: echo "value=${{ github.event_name == 'workflow_run' && github.event.workflow_run.head_sha || github.sha }}" >> $GITHUB_OUTPUT
+
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ steps.sha.outputs.value }}
+          fetch-depth: 2
+
+      # `workflow_run` does not support paths-ignore, so the previous
+      # push-trigger's filter is reproduced here: a docs-only commit should not
+      # ship a new production build.
+      - name: Check for deployable changes
+        id: scope
+        run: |
+          set -euo pipefail
+          SHA="${{ steps.sha.outputs.value }}"
+          echo "sha=${SHA}" >> $GITHUB_OUTPUT
+
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            echo "Manual dispatch — deploying regardless of changed paths."
+            echo "deploy=true" >> $GITHUB_OUTPUT
+            exit 0
+          fi
+
+          CHANGED=$(git diff --name-only HEAD~1...HEAD 2>/dev/null || true)
+          echo "Changed files:"; echo "${CHANGED:-(none)}"
+
+          DEPLOYABLE=$(printf '%s\n' "$CHANGED" | grep -vE '^(README\.md|openapi\.yaml|\.github/)' || true)
+          if [ -n "$DEPLOYABLE" ]; then
+            echo "deploy=true" >> $GITHUB_OUTPUT
+          else
+            echo "::notice::Only docs/workflow files changed — skipping deploy."
+            echo "deploy=false" >> $GITHUB_OUTPUT
+          fi
+
   # ── Build release binary ────────────────────────────────────────────
   build:
     name: Build release binary
+    needs: [gate]
+    if: needs.gate.outputs.deploy == 'true'
     runs-on: ubuntu-latest
+    timeout-minutes: 30
     steps:
       - uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.gate.outputs.sha }}
       - uses: dtolnay/rust-toolchain@stable
         with:
           toolchain: "1.88"
       - uses: Swatinem/rust-cache@v2
-      - name: Test (gate the deploy on a green suite)
-        run: cargo test
       - name: Build release
         run: cargo build --release
       - name: Upload binary artifact
@@ -39,12 +101,15 @@ jobs:
   # ── Create GitHub Release ───────────────────────────────────────────
   release:
     name: Create GitHub Release
-    needs: build
+    needs: [gate, build]
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     permissions:
       contents: write
     steps:
       - uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.gate.outputs.sha }}
       - uses: actions/download-artifact@v4
         with:
           name: kairos-connect-doc-parser
@@ -71,7 +136,7 @@ jobs:
   # ── Deploy to Railway ───────────────────────────────────────────────
   deploy:
     name: Deploy to Railway
-    needs: release
+    needs: [gate, release]
     runs-on: ubuntu-latest
     timeout-minutes: 20
     env:
@@ -82,8 +147,66 @@ jobs:
       # Required: `railway up` uploads the build context (Dockerfile + source).
       # Without a checkout it would upload an empty directory.
       - uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.gate.outputs.sha }}
+
+      # Installing the CLI is the least reliable step in this pipeline, and
+      # both failures so far came from the same place: GitHub's release CDN.
+      #   run 31619921330 -- npm postinstall, "socket hang up"
+      #   run 31620361142 -- direct curl, six retries all HTTP 503
+      #
+      # `npm install -g @railway/cli` is NOT an independent fallback: its
+      # postinstall downloads from that same CDN, so it fails identically.
+      # The real mitigations are (a) cache the binary so most runs never
+      # download at all, and (b) when we must fetch, try both the authenticated
+      # API and the CDN, with backoff long enough to outlast a 503 wave.
+      - name: Cache Railway CLI
+        id: railway-cache
+        uses: actions/cache@v4
+        with:
+          path: ~/.local/bin/railway
+          key: railway-cli-${{ env.RAILWAY_CLI_VERSION }}-x86_64-linux-musl
+
       - name: Install Railway CLI
-        run: npm install -g @railway/cli
+        if: steps.railway-cache.outputs.cache-hit != 'true'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          V="${RAILWAY_CLI_VERSION}"
+          TARBALL="railway-v${V}-x86_64-unknown-linux-musl.tar.gz"
+          mkdir -p "$HOME/.local/bin"
+
+          via_api() {
+            gh release download "v${V}" -R railwayapp/cli \
+              -p "$TARBALL" -O /tmp/railway.tar.gz --clobber
+          }
+          via_cdn() {
+            curl -fsSL \
+              --retry 8 --retry-delay 10 --retry-all-errors \
+              --connect-timeout 15 --max-time 300 \
+              -o /tmp/railway.tar.gz \
+              "https://github.com/railwayapp/cli/releases/download/v${V}/${TARBALL}"
+          }
+
+          if via_api; then
+            echo "Fetched via authenticated GitHub API."
+          elif via_cdn; then
+            echo "Fetched via release CDN."
+          else
+            echo "::error::Could not download Railway CLI v${V} by any route. Both the GitHub API and the release CDN failed; this is upstream, not a repo problem. Re-run the job."
+            exit 1
+          fi
+
+          tar -xzf /tmp/railway.tar.gz -C "$HOME/.local/bin" railway
+          chmod +x "$HOME/.local/bin/railway"
+
+      - name: Put Railway CLI on PATH
+        run: |
+          echo "$HOME/.local/bin" >> "$GITHUB_PATH"
+
+      - name: Confirm Railway CLI
+        run: railway --version
 
       # Railway has two kinds of token and the CLI reads them from DIFFERENT
       # variables:
@@ -128,7 +251,7 @@ jobs:
         run: |
           set -euo pipefail
           # An account token carries no project context, so link explicitly.
-          # A project token already implies its project -- linking with one is
+          # A project token already implies its project — linking with one is
           # unnecessary and would fail.
           if [ -n "${RAILWAY_API_TOKEN:-}" ]; then
             echo "Using account token — linking project/service explicitly."
