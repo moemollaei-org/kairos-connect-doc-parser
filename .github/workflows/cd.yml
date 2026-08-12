@@ -264,6 +264,9 @@ jobs:
           else
             echo "Using project token — project context is implied by the token."
           fi
+          # The image busts its binary-download cache on this file. Without it
+          # Docker reuses the cached layer and ships the previous binary.
+          echo "${{ needs.gate.outputs.sha }}" > .deploy-sha
           railway up --service="$SVC_ID" --detach
 
       # `railway up --detach` returns as soon as the upload is accepted, so a
