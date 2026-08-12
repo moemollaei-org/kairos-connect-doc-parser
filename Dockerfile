@@ -1,4 +1,7 @@
-FROM debian:bookworm-slim
+# Debian 13 (trixie) ships glibc 2.41. The release binary is built on
+# ubuntu-latest (24.04 / glibc 2.39); bookworm-slim only has 2.36, so the
+# binary died at exec with: version `GLIBC_2.39" not found.
+FROM debian:trixie-slim
 
 # Install runtime dependencies: tesseract (OCR) and poppler-utils (PDF rendering)
 RUN apt-get update && apt-get install -y --no-install-recommends \
