@@ -73,15 +73,70 @@ jobs:
     name: Deploy to Railway
     needs: release
     runs-on: ubuntu-latest
+    timeout-minutes: 20
     env:
+      PROJECT_ID: 49342b8b-261c-434e-ad17-5e93ea4ccd95
       SVC_ID: 77474781-0169-4023-b6b2-16db0fae370f
+      RAILWAY_ENV: ${{ vars.RAILWAY_ENVIRONMENT || 'production' }}
     steps:
       # Required: `railway up` uploads the build context (Dockerfile + source).
       # Without a checkout it would upload an empty directory.
       - uses: actions/checkout@v4
       - name: Install Railway CLI
         run: npm install -g @railway/cli
+
+      # Railway has two kinds of token and the CLI reads them from DIFFERENT
+      # variables:
+      #
+      #   project token  (Project -> Settings -> Tokens)  -> RAILWAY_TOKEN
+      #   account token  (Account -> Tokens)              -> RAILWAY_API_TOKEN
+      #
+      # A project token is scoped to one project+environment and lets
+      # `railway up --service=<id>` run with no linking. An account token spans
+      # projects but has no implicit project context, so it must link first.
+      #
+      # Put an account token in RAILWAY_TOKEN and the CLI reports
+      # "Invalid RAILWAY_TOKEN", which reads as though the value is wrong
+      # rather than in the wrong variable. This preflight says which it is.
+      - name: Preflight — check Railway credentials
+        env:
+          RAILWAY_TOKEN: ${{ secrets.RAILWAY_TOKEN }}
+          RAILWAY_API_TOKEN: ${{ secrets.RAILWAY_API_TOKEN }}
+        run: |
+          echo "RAILWAY_TOKEN (project token) present:     $([ -n "$RAILWAY_TOKEN" ] && echo yes || echo no)"
+          echo "RAILWAY_API_TOKEN (account token) present: $([ -n "$RAILWAY_API_TOKEN" ] && echo yes || echo no)"
+
+          if [ -z "$RAILWAY_TOKEN" ] && [ -z "$RAILWAY_API_TOKEN" ]; then
+            echo "::error::No Railway credential configured. Add RAILWAY_TOKEN (project token) or RAILWAY_API_TOKEN (account token)."
+            exit 1
+          fi
+
+          # If a value is sitting in the wrong variable, this identifies it:
+          # `whoami` only resolves for an account token. Prints an email, never
+          # the token itself.
+          if [ -n "$RAILWAY_TOKEN" ] && [ -z "$RAILWAY_API_TOKEN" ]; then
+            if RAILWAY_TOKEN= RAILWAY_API_TOKEN="$RAILWAY_TOKEN" railway whoami >/dev/null 2>&1; then
+              echo "::error::The value in RAILWAY_TOKEN is an ACCOUNT token, not a project token. Store it as the secret RAILWAY_API_TOKEN instead (or create a project token under the Kairos Connect project and keep it in RAILWAY_TOKEN)."
+              exit 1
+            fi
+          fi
+
       - name: Trigger Railway deploy
         env:
           RAILWAY_TOKEN: ${{ secrets.RAILWAY_TOKEN }}
-        run: railway up --service=${{ env.SVC_ID }} --detach
+          RAILWAY_API_TOKEN: ${{ secrets.RAILWAY_API_TOKEN }}
+        run: |
+          set -euo pipefail
+          # An account token carries no project context, so link explicitly.
+          # A project token already implies its project -- linking with one is
+          # unnecessary and would fail.
+          if [ -n "${RAILWAY_API_TOKEN:-}" ]; then
+            echo "Using account token — linking project/service explicitly."
+            railway link \
+              --project "$PROJECT_ID" \
+              --service "$SVC_ID" \
+              --environment "$RAILWAY_ENV"
+          else
+            echo "Using project token — project context is implied by the token."
+          fi
+          railway up --service="$SVC_ID" --detach
