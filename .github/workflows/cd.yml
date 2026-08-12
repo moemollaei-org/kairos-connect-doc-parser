@@ -281,15 +281,35 @@ jobs:
         run: |
           set -uo pipefail
           URL="https://parse-doc.thekairos.app/health"
-          for attempt in $(seq 1 40); do
-            BUILD=$(curl -fsSL --max-time 10 "$URL" 2>/dev/null \
-              | python3 -c 'import json,sys; print(json.load(sys.stdin).get("build",""))' 2>/dev/null || echo "")
-            if [ "$BUILD" = "$EXPECTED_SHA" ]; then
-              echo "::notice::Live build matches $EXPECTED_SHA after ${attempt} attempt(s)."
-              exit 0
+          # A Railway build can sit queued for a builder for several minutes
+          # before it even starts, so allow generously more than a build takes.
+          ATTEMPTS=60
+          INTERVAL=15
+
+          for attempt in $(seq 1 $ATTEMPTS); do
+            BODY=$(curl -fsSL --max-time 10 "$URL" 2>/dev/null) || BODY=""
+
+            if [ -z "$BODY" ]; then
+              STATE="service unreachable"
+            else
+              BUILD=$(printf '%s' "$BODY" \
+                | python3 -c 'import json,sys; print(json.load(sys.stdin).get("build",""))' 2>/dev/null || echo "")
+              if [ "$BUILD" = "$EXPECTED_SHA" ]; then
+                echo "::notice::Live build matches ${EXPECTED_SHA} after ${attempt} attempt(s)."
+                exit 0
+              elif [ -z "$BUILD" ]; then
+                # Reachable, but the response has no `build` key at all: this is
+                # a binary from before /health reported it. Distinct from
+                # unreachable, and from running the wrong commit.
+                STATE="reachable, but serving a pre-stamp binary (no build field)"
+              else
+                STATE="serving build ${BUILD}"
+              fi
             fi
-            echo "attempt ${attempt}: live build='${BUILD:-unreachable}' expected='${EXPECTED_SHA}'"
-            sleep 15
+
+            echo "attempt ${attempt}/${ATTEMPTS}: ${STATE}; want ${EXPECTED_SHA}"
+            sleep $INTERVAL
           done
-          echo "::error::Deploy finished but /health still reports build='${BUILD:-unreachable}', not ${EXPECTED_SHA}. Production is serving a different binary than this run built."
+
+          echo "::error::After $((ATTEMPTS * INTERVAL / 60)) minutes production is still ${STATE}, not ${EXPECTED_SHA}. Check the Railway deployment: a build stuck at \"scheduling build on Metal builder\" never replaces the running container, so this step will wait out its whole budget while the old binary keeps serving."
           exit 1
