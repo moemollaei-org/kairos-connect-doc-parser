@@ -74,7 +74,7 @@ jobs:
     needs: release
     runs-on: ubuntu-latest
     env:
-      SVC_ID: 5be5bfc4-3ede-4302-b666-75c1192251e8
+      SVC_ID: 77474781-0169-4023-b6b2-16db0fae370f
     steps:
       # Required: `railway up` uploads the build context (Dockerfile + source).
       # Without a checkout it would upload an empty directory.
