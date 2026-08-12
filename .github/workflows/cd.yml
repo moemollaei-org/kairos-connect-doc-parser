@@ -1,0 +1,84 @@
+name: CD — Build, Release & Deploy
+
+on:
+  push:
+    branches: [master]
+    paths-ignore:
+      - "README.md"
+      - "openapi.yaml"
+      - ".github/**"
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  # ── Build release binary ────────────────────────────────────────────
+  build:
+    name: Build release binary
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: "1.88"
+      - uses: Swatinem/rust-cache@v2
+      - name: Test (gate the deploy on a green suite)
+        run: cargo test
+      - name: Build release
+        run: cargo build --release
+      - name: Upload binary artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: kairos-connect-doc-parser
+          path: target/release/kairos-connect-doc-parser
+          retention-days: 1
+
+  # ── Create GitHub Release ───────────────────────────────────────────
+  release:
+    name: Create GitHub Release
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          name: kairos-connect-doc-parser
+      - name: Get version from Cargo.toml
+        id: version
+        run: |
+          VERSION=$(grep '^version' Cargo.toml | head -1 | sed 's/.*"\(.*\)".*/\1/')
+          echo "version=$VERSION" >> $GITHUB_OUTPUT
+      - name: Create and push tag
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git tag -f "v${{ steps.version.outputs.version }}"
+          git push -f origin "v${{ steps.version.outputs.version }}"
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: v${{ steps.version.outputs.version }}
+          name: v${{ steps.version.outputs.version }}
+          files: kairos-connect-doc-parser
+          generate_release_notes: true
+          make_latest: true
+
+  # ── Deploy to Railway ───────────────────────────────────────────────
+  deploy:
+    name: Deploy to Railway
+    needs: release
+    runs-on: ubuntu-latest
+    env:
+      SVC_ID: 5be5bfc4-3ede-4302-b666-75c1192251e8
+    steps:
+      # Required: `railway up` uploads the build context (Dockerfile + source).
+      # Without a checkout it would upload an empty directory.
+      - uses: actions/checkout@v4
+      - name: Install Railway CLI
+        run: npm install -g @railway/cli
+      - name: Trigger Railway deploy
+        env:
+          RAILWAY_TOKEN: ${{ secrets.RAILWAY_TOKEN }}
+        run: railway up --service=${{ env.SVC_ID }} --detach
