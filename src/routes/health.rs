@@ -10,5 +10,6 @@ pub async fn health(Extension(config): Extension<Config>) -> Json<HealthResponse
         status: "ok",
         version: env!("CARGO_PKG_VERSION"),
         ocr_available,
+        build: option_env!("BUILD_SHA").unwrap_or("unknown"),
     })
 }

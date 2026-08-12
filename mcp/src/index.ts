@@ -57,7 +57,13 @@ server.registerTool(
   async () =>
     toolResult(async () => {
       const h = await client.health()
-      return `status: ${h.status}\nversion: ${h.version}\nocr_available: ${h.ocr_available}\nbase_url: ${config.baseUrl}`
+      return [
+        `status: ${h.status}`,
+        `version: ${h.version}`,
+        `build: ${h.build ?? 'unknown'}`,
+        `ocr_available: ${h.ocr_available}`,
+        `base_url: ${config.baseUrl}`,
+      ].join('\n')
     }),
 )
 
