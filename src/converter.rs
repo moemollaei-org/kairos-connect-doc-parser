@@ -186,18 +186,32 @@ async fn convert_pdf_with_ocr(
     let ocr_task = tokio::task::spawn(async move {
         match pdf_render::render_pdf_pages(&cfg_ocr, &owned_ocr).await {
             Ok(pages) => {
-                let mut results = Vec::new();
-                for (page_idx, png_bytes) in pages {
-                    match ocr::ocr_image_bytes(&cfg, &png_bytes).await {
-                        Ok(ocr_result) => {
-                            results.push((page_idx, Some(ocr_result)));
+                // Pages were OCR'd strictly one after another, so a 4-page
+                // document cost 4x a single page while the box sat mostly idle.
+                // Each page is an independent tesseract process, so run several
+                // at once, bounded by DOC_PARSER_OCR_PAGE_CONCURRENCY (default:
+                // core count) to avoid oversubscribing a small container.
+                use futures::stream::StreamExt;
+                let concurrency = cfg.ocr_page_concurrency.max(1);
+                let mut results: Vec<(usize, Option<ocr::OcrResult>)> =
+                    futures::stream::iter(pages.into_iter().map(|(page_idx, png_bytes)| {
+                        let cfg = cfg.clone();
+                        async move {
+                            match ocr::ocr_image_bytes(&cfg, &png_bytes).await {
+                                Ok(ocr_result) => (page_idx, Some(ocr_result)),
+                                Err(e) => {
+                                    tracing::warn!("OCR failed for page {page_idx}: {e}");
+                                    (page_idx, None)
+                                }
+                            }
                         }
-                        Err(e) => {
-                            tracing::warn!("OCR failed for page {page_idx}: {e}");
-                            results.push((page_idx, None));
-                        }
-                    }
-                }
+                    }))
+                    .buffer_unordered(concurrency)
+                    .collect()
+                    .await;
+
+                // buffer_unordered completes out of order; page order matters.
+                results.sort_by_key(|(page_idx, _)| *page_idx);
                 Ok(results)
             }
             Err(e) => Err(e),

@@ -14,6 +14,15 @@ pub struct Config {
     pub pdftoppm_bin: String,
     /// Timeout in seconds for OCR operations (default 60)
     pub ocr_timeout_secs: u64,
+    /// `pdfimages` CLI path (poppler). Used for the scanned-PDF fast path.
+    pub pdfimages_bin: String,
+    /// Longest edge, in pixels, fed to Tesseract. Scans are commonly embedded at
+    /// 600 PPI (~5100x7016); recognising at that size costs several seconds per
+    /// page for no accuracy gain. 3400 measured as the point where word recall
+    /// stops improving.
+    pub ocr_max_pixels: u32,
+    /// How many pages to OCR concurrently. Defaults to the core count.
+    pub ocr_page_concurrency: usize,
 }
 
 impl Config {
@@ -49,6 +58,21 @@ impl Config {
                 .unwrap_or_else(|_| "60".into())
                 .parse()
                 .expect("DOC_PARSER_OCR_TIMEOUT_SECS must be a valid u64"),
+            pdfimages_bin: std::env::var("DOC_PARSER_PDFIMAGES_BIN")
+                .unwrap_or_else(|_| "pdfimages".into()),
+            ocr_max_pixels: std::env::var("DOC_PARSER_OCR_MAX_PIXELS")
+                .ok()
+                .and_then(|s| s.parse().ok())
+                .unwrap_or(3400),
+            ocr_page_concurrency: std::env::var("DOC_PARSER_OCR_PAGE_CONCURRENCY")
+                .ok()
+                .and_then(|s| s.parse().ok())
+                .filter(|n| *n > 0)
+                .unwrap_or_else(|| {
+                    std::thread::available_parallelism()
+                        .map(|n| n.get())
+                        .unwrap_or(2)
+                }),
         }
     }
 }

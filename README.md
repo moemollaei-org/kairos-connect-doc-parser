@@ -265,3 +265,44 @@ See [openapi.yaml](./openapi.yaml) for the complete OpenAPI 3.0 spec. You can pr
 | **Rust** | 1.88, axum 0.8, tokio, anydoc 0.1, image 0.25 |
 | **Runtime deps** | Tesseract OCR, Poppler Utils |
 | **Limits** | 200 MB body, configurable via `DOC_PARSER_MAX_BODY_SIZE` |
+
+## OCR performance
+
+Scanned PDFs embed one large image per page, commonly at 600 PPI (~5100x7016).
+The pipeline used to hand that page to `pdftoppm` to be re-rasterised at 300
+DPI, which cost ~3000 ms per page — three times the OCR itself — and pages were
+then recognised one at a time.
+
+Now a page that is a single embedded image is pulled out verbatim with
+`pdfimages` (~170 ms), downscaled in-process, and pages are OCR'd concurrently.
+Pages that are not a single embedded image (vector art, text plus several
+figures) still go through `pdftoppm`, so nothing regresses. OCR is never
+skipped: a page can carry both selectable text and an image containing more
+text, and both are merged.
+
+Measured on six scanned Dutch registration PDFs (18 pages), concurrency pinned
+to 2 to match a 2-core container:
+
+| | before | after |
+|---|---|---|
+| 4-page KvK extract | 16.6 s | 3.1 s |
+| all six documents | 65.2 s | 14.5 s |
+| per page | ~4.1 s | ~0.65 s |
+
+All key fields (KVK number, RSIN, address, dates) still extract; the faster path
+also reads `btw-nummer` correctly where the 300 DPI raster produced
+`biw-nummer`.
+
+### Tuning
+
+| Variable | Default | Effect |
+|---|---|---|
+| `DOC_PARSER_OCR_MAX_PIXELS` | `3400` | Longest edge fed to Tesseract. `2600` -> ~626 ms/page, `2200` -> ~596 ms/page, both still recovering every key field but ~13% less surrounding text. |
+| `DOC_PARSER_OCR_PAGE_CONCURRENCY` | core count | Pages OCR'd at once. Keep at or below the container's cores. |
+| `DOC_PARSER_OCR_DPI` | `300` | Only used on the `pdftoppm` fallback path. |
+| `DOC_PARSER_PDFIMAGES_BIN` | `pdfimages` | Poppler binary for the fast path. |
+
+Roughly 500-600 ms/page is Tesseract's floor for a full-page scan on one core;
+the remaining time is the LSTM pass itself. Going meaningfully below that means
+a different engine (PaddleOCR/RapidOCR ONNX) or a cloud OCR API, not more
+tuning.
