@@ -34,4 +34,6 @@ export interface HealthResponse {
   status: string
   version: string
   ocr_available: boolean
+  /** Commit the running binary was built from; 'unknown' if unstamped. */
+  build?: string
 }

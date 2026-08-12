@@ -76,4 +76,10 @@ pub struct HealthResponse {
     pub version: &'static str,
     /// Whether OCR support is available (tesseract found on PATH)
     pub ocr_available: bool,
+    /// Commit this binary was built from, stamped in by CI via BUILD_SHA.
+    ///
+    /// The version string comes from Cargo.toml and rarely changes, so it
+    /// cannot tell you whether a deploy actually shipped. This can: CD asserts
+    /// the live value matches the commit it just deployed.
+    pub build: &'static str,
 }

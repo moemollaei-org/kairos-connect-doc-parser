@@ -90,7 +90,9 @@ jobs:
           toolchain: "1.88"
       - uses: Swatinem/rust-cache@v2
       - name: Build release
-        run: cargo build --release
+        # Stamp the commit into the binary so /health can prove which build is
+        # actually serving traffic.
+        run: BUILD_SHA="${{ needs.gate.outputs.sha }}" cargo build --release
       - name: Upload binary artifact
         uses: actions/upload-artifact@v4
         with:
@@ -263,3 +265,31 @@ jobs:
             echo "Using project token — project context is implied by the token."
           fi
           railway up --service="$SVC_ID" --detach
+
+      # `railway up --detach` returns as soon as the upload is accepted, so a
+      # green deploy job proves nothing about what is running. Worse, the image
+      # pulls the release binary with a plain `RUN curl .../latest/...`, whose
+      # Docker cache key never changes — a deploy can therefore rebuild happily
+      # and still ship the PREVIOUS binary. That happened: the OCR speedup was
+      # released and deployed, and production kept serving the old build with
+      # every check green.
+      #
+      # Poll /health until the build it reports matches the commit we deployed.
+      - name: Verify the deployed build is the one we just shipped
+        env:
+          EXPECTED_SHA: ${{ needs.gate.outputs.sha }}
+        run: |
+          set -uo pipefail
+          URL="https://parse-doc.thekairos.app/health"
+          for attempt in $(seq 1 40); do
+            BUILD=$(curl -fsSL --max-time 10 "$URL" 2>/dev/null \
+              | python3 -c 'import json,sys; print(json.load(sys.stdin).get("build",""))' 2>/dev/null || echo "")
+            if [ "$BUILD" = "$EXPECTED_SHA" ]; then
+              echo "::notice::Live build matches $EXPECTED_SHA after ${attempt} attempt(s)."
+              exit 0
+            fi
+            echo "attempt ${attempt}: live build='${BUILD:-unreachable}' expected='${EXPECTED_SHA}'"
+            sleep 15
+          done
+          echo "::error::Deploy finished but /health still reports build='${BUILD:-unreachable}', not ${EXPECTED_SHA}. Production is serving a different binary than this run built."
+          exit 1

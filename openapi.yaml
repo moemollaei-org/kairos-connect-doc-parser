@@ -39,6 +39,7 @@ paths:
                 status: "ok"
                 version: "0.2.0"
                 ocr_available: true
+                build: "08e774d71a1fe612e7900278ced8f8019e7da7b4"
 
   /convert:
     post:
@@ -188,6 +189,9 @@ components:
         version:
           type: string
           example: "0.2.0"
+        build:
+          type: string
+          description: Commit the running binary was built from ("unknown" if unstamped)
         ocr_available:
           type: boolean
           description: Whether Tesseract OCR is available on this instance
