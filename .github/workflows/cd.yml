@@ -142,23 +142,63 @@ jobs:
         with:
           ref: ${{ needs.gate.outputs.sha }}
 
-      # `npm install -g @railway/cli` runs a postinstall that downloads the
-      # binary from GitHub releases with no retry — run 31619921330 died there
-      # on a transient "socket hang up". Fetch the binary directly instead: the
-      # download is retryable and the version is pinned, so a CDN blip no
-      # longer fails the deploy and the CLI cannot change under us mid-week.
+      # Installing the CLI is the least reliable step in this pipeline, and
+      # both failures so far came from the same place: GitHub's release CDN.
+      #   run 31619921330 -- npm postinstall, "socket hang up"
+      #   run 31620361142 -- direct curl, six retries all HTTP 503
+      #
+      # `npm install -g @railway/cli` is NOT an independent fallback: its
+      # postinstall downloads from that same CDN, so it fails identically.
+      # The real mitigations are (a) cache the binary so most runs never
+      # download at all, and (b) when we must fetch, try both the authenticated
+      # API and the CDN, with backoff long enough to outlast a 503 wave.
+      - name: Cache Railway CLI
+        id: railway-cache
+        uses: actions/cache@v4
+        with:
+          path: ~/.local/bin/railway
+          key: railway-cli-${{ env.RAILWAY_CLI_VERSION }}-x86_64-linux-musl
+
       - name: Install Railway CLI
+        if: steps.railway-cache.outputs.cache-hit != 'true'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           set -euo pipefail
           V="${RAILWAY_CLI_VERSION}"
-          URL="https://github.com/railwayapp/cli/releases/download/v${V}/railway-v${V}-x86_64-unknown-linux-musl.tar.gz"
-          curl -fsSL \
-            --retry 5 --retry-delay 3 --retry-all-errors \
-            --connect-timeout 15 --max-time 180 \
-            -o /tmp/railway.tar.gz "$URL"
-          sudo tar -xzf /tmp/railway.tar.gz -C /usr/local/bin railway
-          sudo chmod +x /usr/local/bin/railway
-          railway --version
+          TARBALL="railway-v${V}-x86_64-unknown-linux-musl.tar.gz"
+          mkdir -p "$HOME/.local/bin"
+
+          via_api() {
+            gh release download "v${V}" -R railwayapp/cli \
+              -p "$TARBALL" -O /tmp/railway.tar.gz --clobber
+          }
+          via_cdn() {
+            curl -fsSL \
+              --retry 8 --retry-delay 10 --retry-all-errors \
+              --connect-timeout 15 --max-time 300 \
+              -o /tmp/railway.tar.gz \
+              "https://github.com/railwayapp/cli/releases/download/v${V}/${TARBALL}"
+          }
+
+          if via_api; then
+            echo "Fetched via authenticated GitHub API."
+          elif via_cdn; then
+            echo "Fetched via release CDN."
+          else
+            echo "::error::Could not download Railway CLI v${V} by any route. Both the GitHub API and the release CDN failed; this is upstream, not a repo problem. Re-run the job."
+            exit 1
+          fi
+
+          tar -xzf /tmp/railway.tar.gz -C "$HOME/.local/bin" railway
+          chmod +x "$HOME/.local/bin/railway"
+
+      - name: Put Railway CLI on PATH
+        run: |
+          echo "$HOME/.local/bin" >> "$GITHUB_PATH"
+
+      - name: Confirm Railway CLI
+        run: railway --version
 
       # Railway has two kinds of token and the CLI reads them from DIFFERENT
       # variables:
