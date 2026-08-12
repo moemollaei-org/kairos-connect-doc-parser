@@ -1,0 +1,12 @@
+{
+  "mcpServers": {
+    "kairos-doc-parser": {
+      "command": "node",
+      "args": ["./mcp/dist/index.js"],
+      "env": {
+        "DOC_PARSER_API_KEY": "${DOC_PARSER_API_KEY}",
+        "DOC_PARSER_BASE_URL": "https://parse-doc.thekairos.app"
+      }
+    }
+  }
+}
