@@ -25,11 +25,19 @@ pub struct OcrResult {
 ///
 /// Image bytes can be PNG, JPEG, TIFF, BMP, or any format Leptonica supports.
 /// The image is piped to `tesseract stdin stdout -l <lang>` via stdin.
-pub async fn ocr_image_bytes(config: &Config, image_bytes: &[u8]) -> Result<OcrResult, String> {
+/// OCR an image using an explicit language spec (e.g. `nld+eng`).
+///
+/// The spec reaches a command-line argument, so callers must have run it
+/// through `languages::validate` first — never pass caller input here raw.
+pub async fn ocr_image_bytes_with_lang(
+    config: &Config,
+    image_bytes: &[u8],
+    lang: &str,
+) -> Result<OcrResult, String> {
     let start = Instant::now();
 
     let mut child = Command::new(&config.tesseract_bin)
-        .args(["stdin", "stdout", "-l", &config.ocr_languages])
+        .args(["stdin", "stdout", "-l", lang])
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())

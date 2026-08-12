@@ -26,6 +26,19 @@ pub async fn convert(
     Query(query): Query<ConvertQuery>,
     mut multipart: Multipart,
 ) -> Result<Response, AppError> {
+    // Validate the requested language up front, before any file is read: a bad
+    // code should fail the request outright rather than after a large upload.
+    // `auto` is passed through and resolved per document during conversion.
+    let lang = match query.lang.as_deref() {
+        None => None,
+        Some("auto") => Some("auto".to_string()),
+        Some(spec) => Some(
+            crate::languages::validate(&config, spec)
+                .await
+                .map_err(|e| AppError::BadRequest(e.to_string()))?,
+        ),
+    };
+
     // --- Buffer all file parts ---
     let mut inputs: Vec<ConvertInput> = Vec::new();
 
@@ -61,6 +74,7 @@ pub async fn convert(
             bytes: bytes.to_vec(),
             format_hint,
             ocr_enabled: query.ocr,
+            lang: lang.clone(),
         });
     }
 

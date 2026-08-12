@@ -24,7 +24,8 @@ export function summarise(results) {
             ? `OCR on page(s) ${(j.ocr_page_indices ?? []).join(', ') || '?'}`
             : 'no OCR (embedded text layer)';
         const chars = r.markdown?.length ?? 0;
-        return `- ${r.filename}: ${pages} page(s), ${ocr}, ${chars} chars, ${r.elapsed_ms} ms`;
+        const lang = j?.ocr_languages ? `, lang ${j.ocr_languages}` : '';
+        return `- ${r.filename}: ${pages} page(s), ${ocr}${lang}, ${chars} chars, ${r.elapsed_ms} ms`;
     });
     const failed = results.filter((r) => r.error).length;
     const header = `${results.length} file(s) processed` +

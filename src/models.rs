@@ -30,6 +30,14 @@ pub struct DocumentJson {
     /// Total page count
     #[serde(skip_serializing_if = "Option::is_none")]
     pub page_count: Option<usize>,
+    /// Language spec actually used for OCR (e.g. `nld+eng`).
+    ///
+    /// With `lang=auto` this is the detected result. Script detection needs a
+    /// reasonable amount of text and falls back to the server default when it
+    /// cannot tell — reporting the value keeps that fallback visible instead of
+    /// silently returning text recognised with the wrong model.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub ocr_languages: Option<String>,
     /// OCR confidence scores per page (0.0-1.0)
     #[serde(skip_serializing_if = "Option::is_none")]
     pub ocr_confidence: Option<Vec<f64>>,
@@ -64,6 +72,11 @@ pub struct ConvertQuery {
     /// Enable OCR for image-based PDF pages and standalone images
     #[serde(default = "default_true")]
     pub ocr: bool,
+    /// Tesseract language(s) for this request, joined by `+` (e.g. `nld+eng`).
+    ///
+    /// `auto` detects the script per document and picks matching packs. Omitted
+    /// means the server default (`DOC_PARSER_OCR_LANGUAGES`).
+    pub lang: Option<String>,
 }
 
 fn default_true() -> bool {
@@ -76,6 +89,8 @@ pub struct HealthResponse {
     pub version: &'static str,
     /// Whether OCR support is available (tesseract found on PATH)
     pub ocr_available: bool,
+    /// Tesseract language packs installed in this image.
+    pub languages: usize,
     /// Commit this binary was built from, stamped in by CI via BUILD_SHA.
     ///
     /// The version string comes from Cargo.toml and rarely changes, so it

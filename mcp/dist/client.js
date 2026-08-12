@@ -7,6 +7,15 @@ export class DocParserClient {
     constructor(config) {
         this.config = config;
     }
+    /** GET /languages — which packs this deployment can actually read. */
+    async languages() {
+        const res = await this.fetchWithTimeout(`${this.config.baseUrl}/languages`, {
+            method: 'GET',
+        });
+        if (!res.ok)
+            throw new Error(`Listing languages failed: HTTP ${res.status}`);
+        return (await res.json());
+    }
     async health() {
         const res = await this.fetchWithTimeout(`${this.config.baseUrl}/health`, {
             method: 'GET',
@@ -39,6 +48,8 @@ export class DocParserClient {
             url.searchParams.set('ocr', 'false');
         if (options.format)
             url.searchParams.set('format', options.format);
+        if (options.lang)
+            url.searchParams.set('lang', options.lang);
         const res = await this.fetchWithTimeout(url.toString(), {
             method: 'POST',
             headers: { 'X-Api-Key': this.config.apiKey },
@@ -53,6 +64,8 @@ export class DocParserClient {
         const url = new URL(`${this.config.baseUrl}/convert/raw`);
         if (options.ocr === false)
             url.searchParams.set('ocr', 'false');
+        if (options.lang)
+            url.searchParams.set('lang', options.lang);
         const headers = {
             'X-Api-Key': this.config.apiKey,
             'Content-Type': 'application/octet-stream',

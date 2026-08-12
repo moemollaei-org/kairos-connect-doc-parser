@@ -45,7 +45,13 @@ server.registerTool('doc_parser_health', {
     annotations: { readOnlyHint: true, openWorldHint: true },
 }, async () => toolResult(async () => {
     const h = await client.health();
-    return `status: ${h.status}\nversion: ${h.version}\nocr_available: ${h.ocr_available}\nbase_url: ${config.baseUrl}`;
+    return [
+        `status: ${h.status}`,
+        `version: ${h.version}`,
+        `build: ${h.build ?? 'unknown'}`,
+        `ocr_available: ${h.ocr_available}`,
+        `base_url: ${config.baseUrl}`,
+    ].join('\n');
 }));
 server.registerTool('convert_documents', {
     title: 'Convert documents to markdown/JSON',
@@ -67,11 +73,15 @@ server.registerTool('convert_documents', {
             .enum(['csv', 'pdf', 'docx', 'xlsx', 'pptx'])
             .optional()
             .describe('Force a format for files with no detectable signature'),
+        lang: z
+            .string()
+            .optional()
+            .describe("Tesseract language(s) joined by '+', e.g. 'nld' or 'jpn+eng'. Use 'auto' to detect the script per document. Omit for the server default. Call doc_parser_languages for the installed list — with the wrong language, non-Latin scripts return confident garbage rather than an error."),
         max_chars: maxChars,
     },
     annotations: { readOnlyHint: true, openWorldHint: true },
-}, async ({ paths, output, ocr, format, max_chars }) => toolResult(async () => {
-    const results = await client.convert(paths, { ocr, format });
+}, async ({ paths, output, ocr, format, lang, max_chars }) => toolResult(async () => {
+    const results = await client.convert(paths, { ocr, format, lang });
     return renderResults(results, output, max_chars);
 }));
 server.registerTool('convert_document_raw', {
@@ -90,11 +100,15 @@ server.registerTool('convert_document_raw', {
             .string()
             .optional()
             .describe('Override the filename reported to the parser'),
+        lang: z
+            .string()
+            .optional()
+            .describe("Tesseract language(s) joined by '+', e.g. 'nld' or 'jpn+eng'. Use 'auto' to detect the script per document. Omit for the server default. Call doc_parser_languages for the installed list — with the wrong language, non-Latin scripts return confident garbage rather than an error."),
         max_chars: maxChars,
     },
     annotations: { readOnlyHint: true, openWorldHint: true },
-}, async ({ path, output, ocr, format, filename, max_chars }) => toolResult(async () => {
-    const result = await client.convertRaw(path, { ocr, format, filename });
+}, async ({ path, output, ocr, format, filename, lang, max_chars }) => toolResult(async () => {
+    const result = await client.convertRaw(path, { ocr, format, filename, lang });
     return renderResults([result], output, max_chars);
 }));
 server.registerTool('inspect_documents', {
@@ -112,6 +126,15 @@ server.registerTool('inspect_documents', {
 }, async ({ paths, ocr }) => toolResult(async () => {
     const results = await client.convert(paths, { ocr });
     return summarise(results);
+}));
+server.registerTool('doc_parser_languages', {
+    title: 'List installed OCR languages',
+    description: 'List the Tesseract language packs this deployment has installed, plus the default. Use before passing `lang` to convert tools.',
+    inputSchema: {},
+    annotations: { readOnlyHint: true, openWorldHint: true },
+}, async () => toolResult(async () => {
+    const l = await client.languages();
+    return `${l.count} language(s) installed (default: ${l.default})\n\n${l.languages.join(', ')}`;
 }));
 const transport = new StdioServerTransport();
 await server.connect(transport);

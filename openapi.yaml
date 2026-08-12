@@ -41,6 +41,31 @@ paths:
                 ocr_available: true
                 build: "08e774d71a1fe612e7900278ced8f8019e7da7b4"
 
+  /languages:
+    get:
+      summary: List installed OCR languages
+      description: Tesseract language packs available in this deployment, and the default.
+      operationId: languages
+      tags: [System]
+      security: []
+      responses:
+        "200":
+          description: Installed languages
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  languages:
+                    type: array
+                    items: { type: string }
+                  count: { type: integer }
+                  default: { type: string }
+              example:
+                languages: ["ara", "chi_sim", "eng", "jpn", "nld", "rus"]
+                count: 6
+                default: "eng"
+
   /convert:
     post:
       summary: Convert documents to markdown (multipart)
@@ -69,6 +94,20 @@ paths:
           schema:
             type: boolean
             default: true
+        - name: lang
+          in: query
+          description: |
+            Tesseract language(s) joined by `+` (e.g. `nld`, `jpn+eng`), or
+            `auto` to detect the script per document. Defaults to
+            `DOC_PARSER_OCR_LANGUAGES`. Unknown or uninstalled codes are
+            rejected with 400 — see `GET /languages`.
+
+            This matters: with the wrong language, non-Latin scripts do not
+            fail, they return confident garbage (Chinese read as
+            `OLS Hiss #20 BR 2SEMS`, Russian as `Kanpoc KoHHekT OOO`).
+          schema:
+            type: string
+            example: "jpn+eng"
       requestBody:
         required: true
         content:
@@ -189,6 +228,9 @@ components:
         version:
           type: string
           example: "0.2.0"
+        languages:
+          type: integer
+          description: Number of Tesseract language packs installed
         build:
           type: string
           description: Commit the running binary was built from ("unknown" if unstamped)
