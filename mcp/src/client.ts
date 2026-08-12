@@ -9,11 +9,22 @@ import type { ConvertResult, HealthResponse } from './types.js'
 export interface ConvertOptions {
   ocr?: boolean
   format?: string
+  /** Tesseract language(s) joined by '+', or 'auto' to detect per document. */
+  lang?: string
 }
 
 /** Thin typed client over the doc-parser HTTP API. */
 export class DocParserClient {
   constructor(private readonly config: Config) {}
+
+  /** GET /languages — which packs this deployment can actually read. */
+  async languages(): Promise<{ languages: string[]; count: number; default: string }> {
+    const res = await this.fetchWithTimeout(`${this.config.baseUrl}/languages`, {
+      method: 'GET',
+    })
+    if (!res.ok) throw new Error(`Listing languages failed: HTTP ${res.status}`)
+    return (await res.json()) as { languages: string[]; count: number; default: string }
+  }
 
   async health(): Promise<HealthResponse> {
     const res = await this.fetchWithTimeout(`${this.config.baseUrl}/health`, {
@@ -51,6 +62,7 @@ export class DocParserClient {
     const url = new URL(`${this.config.baseUrl}/convert`)
     if (options.ocr === false) url.searchParams.set('ocr', 'false')
     if (options.format) url.searchParams.set('format', options.format)
+    if (options.lang) url.searchParams.set('lang', options.lang)
 
     const res = await this.fetchWithTimeout(url.toString(), {
       method: 'POST',
@@ -70,6 +82,7 @@ export class DocParserClient {
 
     const url = new URL(`${this.config.baseUrl}/convert/raw`)
     if (options.ocr === false) url.searchParams.set('ocr', 'false')
+    if (options.lang) url.searchParams.set('lang', options.lang)
 
     const headers: Record<string, string> = {
       'X-Api-Key': this.config.apiKey,

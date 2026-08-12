@@ -29,12 +29,31 @@ pub async fn convert_raw(
         .and_then(anydoc::Format::from_extension)
         .or_else(|| anydoc::Format::from_bytes(&body));
 
+    // Language may come from the query (?lang=) or the X-Doc-Lang header, so a
+    // raw upload can select one without a query string.
+    let lang_req = query.lang.clone().or_else(|| {
+        headers
+            .get("x-doc-lang")
+            .and_then(|v| v.to_str().ok())
+            .map(str::to_string)
+    });
+    let lang = match lang_req.as_deref() {
+        None => None,
+        Some("auto") => Some("auto".to_string()),
+        Some(spec) => Some(
+            crate::languages::validate(&config, spec)
+                .await
+                .map_err(|e| AppError::BadRequest(e.to_string()))?,
+        ),
+    };
+
     let input = ConvertInput {
         index: 0,
         filename: filename.clone(),
         bytes: body.to_vec(),
         format_hint,
         ocr_enabled: query.ocr,
+        lang,
     };
 
     let start = Instant::now();

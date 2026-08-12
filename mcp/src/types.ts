@@ -16,6 +16,8 @@ export interface DocumentJson {
   ocr_page_indices?: number[]
   format: string
   page_count?: number
+  /** Language spec actually used for OCR; with lang='auto' this is the detected result. */
+  ocr_languages?: string
   ocr_confidence?: number[]
 }
 
@@ -34,6 +36,8 @@ export interface HealthResponse {
   status: string
   version: string
   ocr_available: boolean
+  /** Number of Tesseract language packs installed in the image. */
+  languages?: number
   /** Commit the running binary was built from; 'unknown' if unstamped. */
   build?: string
 }

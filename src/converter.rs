@@ -12,6 +12,9 @@ pub struct ConvertInput {
     pub format_hint: Option<anydoc::Format>,
     /// Whether OCR is enabled for this conversion
     pub ocr_enabled: bool,
+    /// Validated Tesseract language spec, or `None` for the server default.
+    /// `Some("auto")` requests per-document script detection.
+    pub lang: Option<String>,
 }
 
 /// CPU-bound conversion, runs in spawn_blocking for anydoc + async for OCR
@@ -35,13 +38,20 @@ pub async fn convert_one(config: &Config, input: ConvertInput) -> ConvertResult 
         return convert_anydoc_only(index, filename, &input.bytes, format, start).await;
     }
 
+    // `None` here means "detect per document" — resolved once, not per page.
+    let lang = match input.lang.as_deref() {
+        Some("auto") => None,
+        Some(explicit) => Some(explicit.to_string()),
+        None => Some(config.ocr_languages.clone()),
+    };
+
     if is_image && !is_pdf {
         // Direct image → OCR only
-        return convert_image_ocr(config, index, filename, &input.bytes, start).await;
+        return convert_image_ocr(config, index, filename, &input.bytes, lang, start).await;
     }
 
     // PDF: anydoc for text + OCR for image-based pages
-    convert_pdf_with_ocr(config, index, filename, &input.bytes, format, start).await
+    convert_pdf_with_ocr(config, index, filename, &input.bytes, format, lang, start).await
 }
 
 /// Fast path: anydoc only (no OCR)
@@ -69,6 +79,7 @@ async fn convert_anydoc_only(
                 ocr_page_indices: None,
                 format: "document".into(),
                 page_count: None,
+                ocr_languages: None,
                 ocr_confidence: None,
             };
             ConvertResult {
@@ -105,14 +116,20 @@ async fn convert_image_ocr(
     index: usize,
     filename: String,
     bytes: &[u8],
+    lang: Option<String>,
     start: Instant,
 ) -> ConvertResult {
+    let lang_used = match lang {
+        Some(l) => l,
+        None => crate::languages::detect(config, bytes).await,
+    };
+    let lang_for_task = lang_used.clone();
     let owned = bytes.to_vec();
     let cfg = config.clone();
 
     let result = tokio::task::spawn_blocking(move || {
         let rt = tokio::runtime::Runtime::new().unwrap();
-        rt.block_on(ocr::ocr_image_bytes(&cfg, &owned))
+        rt.block_on(ocr::ocr_image_bytes_with_lang(&cfg, &owned, &lang_for_task))
     })
     .await;
 
@@ -133,6 +150,7 @@ async fn convert_image_ocr(
                 ocr_page_indices: Some(vec![0]),
                 format: "image".into(),
                 page_count: Some(1),
+                ocr_languages: Some(lang_used.clone()),
                 ocr_confidence: Some(vec![ocr_result.confidence]),
             };
             ConvertResult {
@@ -170,8 +188,11 @@ async fn convert_pdf_with_ocr(
     filename: String,
     bytes: &[u8],
     format_hint: Option<anydoc::Format>,
+    lang: Option<String>,
     start: Instant,
 ) -> ConvertResult {
+    let lang_report = std::sync::Arc::new(std::sync::Mutex::new(None::<String>));
+    let lang_sink = lang_report.clone();
     let owned = bytes.to_vec();
     let owned_ocr = bytes.to_vec();
     let cfg = config.clone();
@@ -186,6 +207,18 @@ async fn convert_pdf_with_ocr(
     let ocr_task = tokio::task::spawn(async move {
         match pdf_render::render_pdf_pages(&cfg_ocr, &owned_ocr).await {
             Ok(pages) => {
+                // Detect once from the first rendered page: OSD costs a
+                // Tesseract run and a document does not change script midway.
+                let lang = match lang {
+                    Some(l) => l,
+                    None => match pages.first() {
+                        Some((_, first)) => crate::languages::detect(&cfg_ocr, first).await,
+                        None => cfg_ocr.ocr_languages.clone(),
+                    },
+                };
+                if let Ok(mut slot) = lang_sink.lock() {
+                    *slot = Some(lang.clone());
+                }
                 // Pages were OCR'd strictly one after another, so a 4-page
                 // document cost 4x a single page while the box sat mostly idle.
                 // Each page is an independent tesseract process, so run several
@@ -196,8 +229,9 @@ async fn convert_pdf_with_ocr(
                 let mut results: Vec<(usize, Option<ocr::OcrResult>)> =
                     futures::stream::iter(pages.into_iter().map(|(page_idx, png_bytes)| {
                         let cfg = cfg.clone();
+                        let lang = lang.clone();
                         async move {
-                            match ocr::ocr_image_bytes(&cfg, &png_bytes).await {
+                            match ocr::ocr_image_bytes_with_lang(&cfg, &png_bytes, &lang).await {
                                 Ok(ocr_result) => (page_idx, Some(ocr_result)),
                                 Err(e) => {
                                     tracing::warn!("OCR failed for page {page_idx}: {e}");
@@ -277,6 +311,7 @@ async fn convert_pdf_with_ocr(
         ocr_page_indices: ocr_indices,
         format: "pdf".into(),
         page_count,
+        ocr_languages: lang_report.lock().ok().and_then(|l| l.clone()),
         ocr_confidence: confidence,
     };
 

@@ -3,11 +3,18 @@
 # binary died at exec with: version `GLIBC_2.39" not found.
 FROM debian:trixie-slim
 
-# Install runtime dependencies: tesseract (OCR) and poppler-utils (PDF rendering)
+# Install runtime dependencies: tesseract (OCR) and poppler-utils (PDF rendering).
+#
+# tesseract-ocr-all pulls every language pack (~100 languages, adds roughly
+# 800MB to the image). That size buys correctness rather than convenience:
+# with eng alone, non-Latin scripts do not fail — they return confident
+# garbage. A Chinese page came back as "OLS Hiss #20 BR 2SEMS", Russian as
+# "Kanpoc KoHHekT OOO". Text that looks extracted but is nonsense is far worse
+# than an explicit error, because nothing downstream can tell the difference.
 RUN apt-get update && apt-get install -y --no-install-recommends \
     ca-certificates curl \
     tesseract-ocr \
-    tesseract-ocr-eng \
+    tesseract-ocr-all \
     poppler-utils \
     && rm -rf /var/lib/apt/lists/*
 

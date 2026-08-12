@@ -2,6 +2,7 @@ mod auth;
 mod config;
 mod converter;
 mod error;
+mod languages;
 mod models;
 mod ocr;
 mod pdf_render;
@@ -42,6 +43,7 @@ async fn main() -> anyhow::Result<()> {
 
     let app = Router::new()
         .route("/health", get(routes::health::health))
+        .route("/languages", get(routes::languages::languages))
         .route("/convert", post(routes::convert::convert))
         .route("/convert/raw", post(routes::convert_raw::convert_raw))
         .layer(config_mw)
