@@ -29,7 +29,9 @@ pub async fn render_pdf_pages(
     // scan that is ~170ms against ~3000ms for pdftoppm at 300 DPI — the render,
     // not the OCR, was the dominant cost. Pages that are not a single embedded
     // image (vector art, text plus several figures) fall through to pdftoppm.
-    let embedded = list_embedded_images(config, &pdf_path).await.unwrap_or_default();
+    let embedded = list_embedded_images(config, &pdf_path)
+        .await
+        .unwrap_or_default();
     let single_image_pages: std::collections::HashSet<usize> = {
         let mut counts: std::collections::HashMap<usize, (usize, u32)> =
             std::collections::HashMap::new();
@@ -213,10 +215,7 @@ fn downscale_for_ocr(bytes: &[u8], max_edge: u32) -> Result<Vec<u8>, String> {
     let mut out = Vec::new();
     scaled
         .to_luma8()
-        .write_to(
-            &mut std::io::Cursor::new(&mut out),
-            image::ImageFormat::Png,
-        )
+        .write_to(&mut std::io::Cursor::new(&mut out), image::ImageFormat::Png)
         .map_err(|e| format!("encode page image: {e}"))?;
     Ok(out)
 }
