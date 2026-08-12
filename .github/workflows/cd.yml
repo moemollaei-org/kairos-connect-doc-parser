@@ -13,6 +13,14 @@ on:
     types: [completed]
     branches: [master]
 
+# One deploy at a time. The release job force-pushes a tag and replaces the
+# release asset, so two overlapping runs would fight over the same objects.
+# cancel-in-progress stays false deliberately: cancelling a run that has already
+# reached `railway up` would leave a half-finished production deploy.
+concurrency:
+  group: cd-${{ github.ref }}
+  cancel-in-progress: false
+
 env:
   CARGO_TERM_COLOR: always
   RAILWAY_CLI_VERSION: "5.37.7"
