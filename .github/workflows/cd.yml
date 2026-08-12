@@ -1,6 +1,9 @@
 name: CD — Build, Release & Deploy
 
 on:
+  # Manual trigger: lets you redeploy without a code change, and covers
+  # pushes whose only changes are path-ignored below.
+  workflow_dispatch:
   push:
     branches: [master]
     paths-ignore:
